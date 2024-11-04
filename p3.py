@@ -18,6 +18,8 @@ INITIAL_YAW = -np.pi / 2
 YAW_ERROR = 0.01
 YAW_ERROR_TURNING = 0.03
 
+MIN_LATERAL_DISTANCE = 1
+
 
 class Laser:
 
@@ -39,6 +41,18 @@ class Laser:
         # ==================
 
         return all(test_values > SPACE_AVAILABLE_X)
+
+    def is_close_to_right_obstacle(self) -> bool:
+        laser: np.ndarray = np.array(HAL.getRightLaserData().values)
+        return min(laser) < MIN_LATERAL_DISTANCE
+
+    def is_close_to_back_obstacle(self) -> bool:
+        laser: np.ndarray = np.array(HAL.getBackLaserData().values)
+        return min(laser) < MIN_LATERAL_DISTANCE
+
+    def is_close_to_front_obstacle(self) -> bool:
+        laser: np.ndarray = np.array(HAL.getFrontLaserData().values)
+        return min(laser) < MIN_LATERAL_DISTANCE
 
 
 class StateNames(Enum):
@@ -116,6 +130,11 @@ laser = Laser()
 
 while True:
     yaw = HAL.getPose3d().yaw
+    values = np.array(HAL.getRightLaserData().values)
+    values2 = np.array(HAL.getBackLaserData().values)
+    print(
+        f"Right: {min(values):.2f} -> {laser.is_close_to_right_obstacle()}, Back: {min(values2):.2f} -> {laser.is_close_to_back_obstacle()}"
+    )
     match state.current_state:
 
         case StateNames.SEARCHING:
@@ -148,25 +167,30 @@ while True:
             target_yaw = displace_angle(INITIAL_YAW, math.radians(55))
             err = shortest_angle_distance_radians(yaw, target_yaw)
 
-            if abs(err) < YAW_ERROR_TURNING:
+            if laser.is_close_to_right_obstacle() or abs(err) < YAW_ERROR_TURNING:
                 state.change_state(StateNames.OPPOSITE_TURNING)
                 continue
 
             HAL.setV(-PARKING_VEL)
-            HAL.setW(np.sign(err)*TURNING_VEL)
+            HAL.setW(np.sign(err) * TURNING_VEL)
 
-            print(f"{yaw:.2f} -> {target_yaw:.2f}")
+            # print(f"{yaw:.2f} -> {target_yaw:.2f}")
 
         case StateNames.OPPOSITE_TURNING:
             target_yaw = INITIAL_YAW
             err = shortest_angle_distance_radians(yaw, target_yaw)
 
-            if abs(err) < YAW_ERROR_TURNING:
+            if laser.is_close_to_back_obstacle() or abs(err) < YAW_ERROR_TURNING:
                 state.change_state(StateNames.STOP_TURNING)
                 continue
 
+            ang_vel = np.sign(err) * TURNING_VEL
+
+            if laser.is_close_to_right_obstacle():
+                ang_vel = 0
+
             HAL.setV(-PARKING_VEL)
-            HAL.setW(np.sign(err)*TURNING_VEL)
+            HAL.setW(ang_vel)
 
         case StateNames.STOP_TURNING:
             if state.deadline_reached():
@@ -175,7 +199,7 @@ while True:
             HAL.setW(0)
 
         case StateNames.RELOCATE:
-            if state.deadline_reached():
+            if laser.is_close_to_front_obstacle() or state.deadline_reached():
                 state.change_state(StateNames.FINISH)
 
             HAL.setV(PARKING_VEL)
