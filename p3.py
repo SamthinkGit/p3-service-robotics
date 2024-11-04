@@ -1,3 +1,12 @@
+"""
+Laser Navigation System
+==============================
+
+This module provides classes and functions to manage obstacle detection and
+auto-parking management. It utilizes data from laser sensors to determine the
+availability of parking spaces, as well as the proximity to various obstacles.
+"""
+
 import HAL  # noqa
 import GUI  # noqa
 import time
@@ -7,39 +16,32 @@ from enum import Enum, auto
 import math
 
 
-# ============= CONSTANTS ================
-SPACE_AVAILABLE_Y = 70
-SPACE_AVAILABLE_X = 6
-DEFAULT_VEL = 2
-PARKING_VEL = 1.5
+# ================== CONSTANTS =====================
 
-TURNING_VEL = 2.5
-INITIAL_YAW = -np.pi / 2
-YAW_ERROR = 0.01
-YAW_ERROR_TURNING = 0.03
+INITIAL_YAW = -np.pi / 2  # Direction of the street
 
-MIN_LATERAL_DISTANCE = 1
+SPACE_AVAILABLE_Y = 70    # Space for the car in laser rows
+SPACE_AVAILABLE_X = 6     # Space for the car in metters
+DEFAULT_VEL = 2           # Searching velocity
+PARKING_VEL = 1.5         # Parking velocity
+TURNING_VEL = 2.5         # Angular velocity when parking
+YAW_ERROR = 0.01          # Yaw umbral when navigating
+YAW_ERROR_TURNING = 0.03  # Yaw umbral when parking
+MIN_LATERAL_DISTANCE = 1  # Minimum distance (in metters) to obstacles
 
 
+# ================== Detection =====================
 class Laser:
 
     def parking_space_available(self) -> bool:
+        """Checks if there is an available parking space by analyzing
+        laser data from the right side."""
         laser: np.ndarray = np.array(HAL.getRightLaserData().values)
         center_idx = int(len(laser) / 2)
         start = int(center_idx - SPACE_AVAILABLE_Y / 2)
         end = int(center_idx + SPACE_AVAILABLE_Y / 2)
 
         test_values = laser[start:end]
-
-        # ===== Debugging ====
-        # spaces = test_values > SPACE_AVAILABLE_X
-        # q = 0
-        # for s in spaces:
-        #     if s:
-        #         q += 1
-        # print(f"{Fore.YELLOW}{laser[center_idx-1: center_idx+1]}{Fore.RESET} -> Y: {q} / {SPACE_AVAILABLE_Y}")
-        # ==================
-
         return all(test_values > SPACE_AVAILABLE_X)
 
     def is_close_to_right_obstacle(self) -> bool:
@@ -55,6 +57,7 @@ class Laser:
         return min(laser) < MIN_LATERAL_DISTANCE
 
 
+# ================== FSM =====================
 class StateNames(Enum):
     LOCATING: int = auto()
     SEARCHING: int = auto()
@@ -76,24 +79,34 @@ class State:
         self.deadlines = deadlines
 
     def change_state(self, next_state: StateNames) -> None:
+        """Changes the current state of the fsm to the specified next state"""
         self.current_state = next_state
         self.start = time.perf_counter()
 
     def deadline_reached(self):
+        """Checks if the time elapsed since the current state was set has
+        exceeded its deadline"""
         deadline = self.deadlines[self.current_state]
         return state.elapsed_time > deadline
 
     @property
     def elapsed_time(self) -> float:
+        """Elapsed time since the current state was set."""
         return time.perf_counter() - self.start
 
 
+# ================== Utils =====================
 def displace_angle(initial, displacement):
+    """Adjusts an initial angle by a specified displacement, ensuring
+    the result remains within the range of -π to π."""
     result = initial + displacement
     return (result + math.pi) % (2 * math.pi) - math.pi
 
 
 def shortest_angle_distance_radians(a, b):
+    """Calculates the shortest angular distance between two angles in radians.
+    This function ensures that the distance is minimized by accounting for the
+    circular nature of angular measurements."""
     a = a % (2 * math.pi)
     b = b % (2 * math.pi)
 
@@ -111,7 +124,7 @@ def log(text):
     print(f"{Fore.YELLOW}{Style.BRIGHT} -> {text}{Style.RESET_ALL}")
 
 
-# ============= MAIN ================
+# ============= Initializing ================
 
 deadlines = {
     StateNames.SEARCHING: None,
@@ -128,13 +141,9 @@ print("\n" * 30)
 print("=" * 30 + " Starting " + "=" * 30)
 laser = Laser()
 
+# ================== MAIN =====================
 while True:
     yaw = HAL.getPose3d().yaw
-    values = np.array(HAL.getRightLaserData().values)
-    values2 = np.array(HAL.getBackLaserData().values)
-    print(
-        f"Right: {min(values):.2f} -> {laser.is_close_to_right_obstacle()}, Back: {min(values2):.2f} -> {laser.is_close_to_back_obstacle()}"
-    )
     match state.current_state:
 
         case StateNames.SEARCHING:
@@ -174,8 +183,6 @@ while True:
             HAL.setV(-PARKING_VEL)
             HAL.setW(np.sign(err) * TURNING_VEL)
 
-            # print(f"{yaw:.2f} -> {target_yaw:.2f}")
-
         case StateNames.OPPOSITE_TURNING:
             target_yaw = INITIAL_YAW
             err = shortest_angle_distance_radians(yaw, target_yaw)
@@ -201,6 +208,7 @@ while True:
         case StateNames.RELOCATE:
             if laser.is_close_to_front_obstacle() or state.deadline_reached():
                 state.change_state(StateNames.FINISH)
+                log("Parking Completed, exit.")
 
             HAL.setV(PARKING_VEL)
 
