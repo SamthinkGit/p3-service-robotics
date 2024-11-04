@@ -4,6 +4,8 @@ import time
 import numpy as np
 from colorama import Fore, Style
 from enum import Enum, auto
+import math
+
 
 # ============= CONSTANTS ================
 SPACE_AVAILABLE_Y = 70
@@ -14,6 +16,7 @@ PARKING_VEL = 1.5
 TURNING_VEL = 2.5
 INITIAL_YAW = -np.pi / 2
 YAW_ERROR = 0.01
+YAW_ERROR_TURNING = 0.03
 
 
 class Laser:
@@ -71,6 +74,24 @@ class State:
         return time.perf_counter() - self.start
 
 
+def displace_angle(initial, displacement):
+    result = initial + displacement
+    return (result + math.pi) % (2 * math.pi) - math.pi
+
+
+def shortest_angle_distance_radians(a, b):
+    a = a % (2 * math.pi)
+    b = b % (2 * math.pi)
+
+    diff = b - a
+    if diff > math.pi:
+        diff -= 2 * math.pi
+    elif diff < -math.pi:
+        diff += 2 * math.pi
+
+    return diff
+
+
 # ============= Debugging ================
 def log(text):
     print(f"{Fore.YELLOW}{Style.BRIGHT} -> {text}{Style.RESET_ALL}")
@@ -94,13 +115,12 @@ print("=" * 30 + " Starting " + "=" * 30)
 laser = Laser()
 
 while True:
+    yaw = HAL.getPose3d().yaw
     match state.current_state:
 
         case StateNames.SEARCHING:
 
-            yaw = HAL.getPose3d().yaw
             err = yaw - INITIAL_YAW
-            print(yaw)
             if abs(err) > YAW_ERROR:
                 HAL.setW(-3 * err)
             else:
@@ -124,18 +144,29 @@ while True:
             HAL.setV(0)
 
         case StateNames.TURNING:
-            if state.deadline_reached():
+
+            target_yaw = displace_angle(INITIAL_YAW, math.radians(55))
+            err = shortest_angle_distance_radians(yaw, target_yaw)
+
+            if abs(err) < YAW_ERROR_TURNING:
                 state.change_state(StateNames.OPPOSITE_TURNING)
+                continue
 
             HAL.setV(-PARKING_VEL)
-            HAL.setW(TURNING_VEL)
+            HAL.setW(np.sign(err)*TURNING_VEL)
+
+            print(f"{yaw:.2f} -> {target_yaw:.2f}")
 
         case StateNames.OPPOSITE_TURNING:
-            if state.deadline_reached():
+            target_yaw = INITIAL_YAW
+            err = shortest_angle_distance_radians(yaw, target_yaw)
+
+            if abs(err) < YAW_ERROR_TURNING:
                 state.change_state(StateNames.STOP_TURNING)
+                continue
 
             HAL.setV(-PARKING_VEL)
-            HAL.setW(-TURNING_VEL)
+            HAL.setW(np.sign(err)*TURNING_VEL)
 
         case StateNames.STOP_TURNING:
             if state.deadline_reached():
