@@ -18,16 +18,17 @@ import math
 
 # ================== CONSTANTS =====================
 
-INITIAL_YAW = -np.pi / 2  # Direction of the street
-
-SPACE_AVAILABLE_Y = 70    # Space for the car in laser rows
-SPACE_AVAILABLE_X = 6     # Space for the car in metters
-DEFAULT_VEL = 2           # Searching velocity
-PARKING_VEL = 1.5         # Parking velocity
-TURNING_VEL = 2.5         # Angular velocity when parking
-YAW_ERROR = 0.01          # Yaw umbral when navigating
+SPACE_AVAILABLE_Y = 70  # Space for the car in laser rows
+SPACE_AVAILABLE_X = 6  # Space for the car in metters
+DEFAULT_VEL = 2  # Searching velocity
+PARKING_VEL = 1.5  # Parking velocity
+TURNING_VEL = 2.5  # Angular velocity when parking
+INITIAL_YAW_ERROR = 0.1
+YAW_ERROR = 0.01  # Yaw umbral when navigating
 YAW_ERROR_TURNING = 0.03  # Yaw umbral when parking
 MIN_LATERAL_DISTANCE = 1  # Minimum distance (in metters) to obstacles
+YAW_SEARCHING_P = 0.7
+ERROR_CONSIDERED_INF = 10
 
 
 # ================== Detection =====================
@@ -142,13 +143,28 @@ print("=" * 30 + " Starting " + "=" * 30)
 laser = Laser()
 
 # ================== MAIN =====================
+initial_yaw = None
+err = 0
+
 while True:
     yaw = HAL.getPose3d().yaw
     match state.current_state:
 
         case StateNames.SEARCHING:
+            front = HAL.getFrontLaserData().values[0]
+            back = HAL.getBackLaserData().values[-1]
 
-            err = yaw - INITIAL_YAW
+            if initial_yaw is None:
+                err = (front - back)*YAW_SEARCHING_P
+                if abs(back) > ERROR_CONSIDERED_INF or abs(front) > ERROR_CONSIDERED_INF:
+                    err = 0
+            else:
+                err = yaw - initial_yaw
+
+            if initial_yaw is None and abs(front - back) < INITIAL_YAW_ERROR:
+                initial_yaw = yaw
+                log(f"Detected yaw orientation of the street: [{initial_yaw:.3f}]")
+
             if abs(err) > YAW_ERROR:
                 HAL.setW(-3 * err)
             else:
@@ -173,7 +189,7 @@ while True:
 
         case StateNames.TURNING:
 
-            target_yaw = displace_angle(INITIAL_YAW, math.radians(55))
+            target_yaw = displace_angle(initial_yaw, math.radians(55))
             err = shortest_angle_distance_radians(yaw, target_yaw)
 
             if laser.is_close_to_right_obstacle() or abs(err) < YAW_ERROR_TURNING:
@@ -184,7 +200,7 @@ while True:
             HAL.setW(np.sign(err) * TURNING_VEL)
 
         case StateNames.OPPOSITE_TURNING:
-            target_yaw = INITIAL_YAW
+            target_yaw = initial_yaw
             err = shortest_angle_distance_radians(yaw, target_yaw)
 
             if laser.is_close_to_back_obstacle() or abs(err) < YAW_ERROR_TURNING:
