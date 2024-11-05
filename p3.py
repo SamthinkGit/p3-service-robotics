@@ -12,6 +12,7 @@ import GUI  # noqa
 import time
 import numpy as np
 from colorama import Fore, Style
+from dataclasses import dataclass
 from enum import Enum, auto
 import math
 
@@ -20,19 +21,62 @@ import math
 
 SPACE_AVAILABLE_Y = 70  # Space for the car in laser rows
 SPACE_AVAILABLE_X = 6  # Space for the car in metters
+
+SPACE_AVAILABLE_WIDTH = 6
+SPACE_AVAILABLE_DEPTH = 6
+
 DEFAULT_VEL = 2  # Searching velocity
 PARKING_VEL = 1.5  # Parking velocity
-TURNING_VEL = 2.5  # Angular velocity when parking
+TURNING_VEL = 6.5  # Angular velocity when parking
 INITIAL_YAW_ERROR = 0.1
 YAW_ERROR = 0.01  # Yaw umbral when navigating
 YAW_ERROR_TURNING = 0.03  # Yaw umbral when parking
 MIN_LATERAL_DISTANCE = 1  # Minimum distance (in metters) to obstacles
+MIN_BACK_DISTANCE = 1.5  # Minimum distance (in metters) to obstacles
 YAW_SEARCHING_P = 0.7
 ERROR_CONSIDERED_INF = 10
+LASER_N_VALUES = 180
+LASER_RADIANS = np.pi
+
+
+# ================== Util Classes =====================
+@dataclass
+class Vector:
+    """
+    This class simplifies the process of working with 2d vectors.
+    It will be used instead of 2-element array for improving readability.
+    """
+
+    x: float
+    y: float
 
 
 # ================== Detection =====================
 class Laser:
+
+    def parking_space_available_v2(self) -> bool:
+        laser: np.ndarray = np.array(HAL.getRightLaserData().values)
+
+        vectors: list[Vector] = []
+        val: float
+        for idx, val in enumerate(laser):
+            if abs(val) > ERROR_CONSIDERED_INF:
+                continue
+
+            alpha = (idx / LASER_N_VALUES) * LASER_RADIANS
+            vectors.append(
+                Vector(
+                    x=val * np.cos(alpha),
+                    y=val * np.sin(alpha),
+                )
+            )
+
+        lateral_size = SPACE_AVAILABLE_WIDTH / 2
+
+        for vec in vectors:
+            if abs(vec.x) < lateral_size and abs(vec.y) < SPACE_AVAILABLE_DEPTH:
+                return False
+        return True
 
     def parking_space_available(self) -> bool:
         """Checks if there is an available parking space by analyzing
@@ -51,7 +95,7 @@ class Laser:
 
     def is_close_to_back_obstacle(self) -> bool:
         laser: np.ndarray = np.array(HAL.getBackLaserData().values)
-        return min(laser) < MIN_LATERAL_DISTANCE
+        return min(laser) < MIN_BACK_DISTANCE
 
     def is_close_to_front_obstacle(self) -> bool:
         laser: np.ndarray = np.array(HAL.getFrontLaserData().values)
@@ -129,10 +173,10 @@ def log(text):
 
 deadlines = {
     StateNames.SEARCHING: None,
-    StateNames.FORWARDING: 8,
+    StateNames.FORWARDING: 8.5,
     StateNames.BRAKING: 1,
-    StateNames.TURNING: 9.5,
-    StateNames.OPPOSITE_TURNING: 7.5,
+    StateNames.TURNING: None,
+    StateNames.OPPOSITE_TURNING: None,
     StateNames.STOP_TURNING: 1,
     StateNames.RELOCATE: 1,
 }
@@ -155,8 +199,11 @@ while True:
             back = HAL.getBackLaserData().values[-1]
 
             if initial_yaw is None:
-                err = (front - back)*YAW_SEARCHING_P
-                if abs(back) > ERROR_CONSIDERED_INF or abs(front) > ERROR_CONSIDERED_INF:
+                err = (front - back) * YAW_SEARCHING_P
+                if (
+                    abs(back) > ERROR_CONSIDERED_INF
+                    or abs(front) > ERROR_CONSIDERED_INF
+                ):
                     err = 0
             else:
                 err = yaw - initial_yaw
@@ -170,7 +217,7 @@ while True:
             else:
                 HAL.setW(0)
 
-            if laser.parking_space_available():
+            if laser.parking_space_available_v2():
                 state.change_state(StateNames.FORWARDING)
                 log("Free space found. Starting parking...")
                 continue
